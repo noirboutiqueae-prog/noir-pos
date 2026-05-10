@@ -3,8 +3,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
-# تم التحديث للمكتبة الجديدة بناءً على تحذير النظام في 2026
-from google import genai 
+import google.generativeai as genai  # عدنا للطريقة المستقرة لضمان عمل البرنامج فوراً
 
 # --- 1. إعدادات الصفحة والثيم (Noir Boutique Style) ---
 st.set_page_config(page_title="Noir Boutique POS", layout="wide")
@@ -16,7 +15,7 @@ st.markdown("""
     .stButton>button { background-color: #1A1A1A; color: white; border-radius: 10px; height: 3em; width: 100%; font-weight: bold; }
     h1, h2, h3 { color: #1A1A1A; text-align: center; font-family: 'serif'; }
     @media print {
-        .stButton, .stTabs, [data-testid="stSidebar"] { display: none !important; }
+        .stButton, .stTabs, [data-testid="stSidebar"], .stHeader { display: none !important; }
         .print-only { display: block !important; }
     }
     </style>
@@ -34,10 +33,10 @@ def get_spreadsheet():
         st.error(f"⚠️ Connection Error: {e}")
         return None
 
-# إعداد الذكاء الاصطناعي (Gemini 2026 SDK)
-client_ai = None
+# إعداد الذكاء الاصطناعي
 try:
-    client_ai = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    ai_model = genai.GenerativeModel('gemini-pro')
 except:
     pass
 
@@ -47,11 +46,9 @@ def load_data():
         sheet = doc.sheet1
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        # التأكد من وجود الأعمدة المطلوبة لتجنب الـ KeyError
-        required_cols = ['Name', 'Stock', 'Cost', 'Sell', 'Sold_Today', 'Waste_Qty']
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = 0
+        # التأكد من أسماء الأعمدة لتجنب الـ KeyError
+        if 'Waste_Qty' not in df.columns and 'Waste' in df.columns:
+            df.rename(columns={'Waste': 'Waste_Qty'}, inplace=True)
         return df
     return pd.DataFrame()
 
@@ -80,9 +77,15 @@ df = st.session_state.df
 st.write("<h1>🖤 NOIR BOUTIQUE</h1>", unsafe_allow_html=True)
 
 if not df.empty:
-    # تم تعديل الأسماء هنا لتطابق قوقل شيت (Waste_Qty بدلاً من Waste)
-    waste_loss = (df['Waste_Qty'].astype(float) * df['Cost'].astype(float)).sum()
-    daily_profit = (df['Sold_Today'].astype(float) * (df['Sell'].astype(float) - df['Cost'].astype(float))).sum()
+    # حساب الإحصائيات مع التأكد من نوع البيانات
+    df['Cost'] = pd.to_numeric(df['Cost'], errors='coerce').fillna(0)
+    df['Sell'] = pd.to_numeric(df['Sell'], errors='coerce').fillna(0)
+    df['Stock'] = pd.to_numeric(df['Stock'], errors='coerce').fillna(0)
+    df['Sold_Today'] = pd.to_numeric(df['Sold_Today'], errors='coerce').fillna(0)
+    df['Waste_Qty'] = pd.to_numeric(df.get('Waste_Qty', 0), errors='coerce').fillna(0)
+
+    waste_loss = (df['Waste_Qty'] * df['Cost']).sum()
+    daily_profit = (df['Sold_Today'] * (df['Sell'] - df['Cost'])).sum()
     
     col1, col2, col3 = st.columns(3)
     with col1: st.metric("📦 Total Stems", int(df['Stock'].sum()))
@@ -95,8 +98,8 @@ if not df.empty:
 
     with tab1:
         c1, c2 = st.columns(2)
-        with c1: item = st.selectbox("Select Item", df['Name'].unique())
-        with c2: qty = st.number_input("Qty", min_value=1, step=1)
+        with c1: item = st.selectbox("Select Flower", df['Name'].unique())
+        with c2: qty = st.number_input("Quantity", min_value=1, step=1)
         
         if st.button("Confirm Sale ✅"):
             idx = df[df['Name'] == item].index[0]
@@ -108,10 +111,10 @@ if not df.empty:
                 log_transaction(item, qty, u_price, u_price * qty)
                 st.success("Sale Recorded!")
                 st.rerun()
-            else: st.error("No Stock!")
+            else: st.error("Out of stock!")
 
     with tab2:
-        w_item = st.selectbox("Damaged Flower", df['Name'].unique(), key="w")
+        w_item = st.selectbox("Damaged Item", df['Name'].unique(), key="w")
         w_qty = st.number_input("Qty", min_value=1, key="wq")
         if st.button("Confirm Waste 🗑️"):
             idx = df[df['Name'] == w_item].index[0]
@@ -122,28 +125,15 @@ if not df.empty:
                 st.rerun()
 
     with tab3:
-        # تحديث width='stretch' ليتوافق مع نسخة 2026
         st.dataframe(df, width='stretch')
-        
         if st.button("🖨️ Print Daily Report"):
             st.markdown("<script>window.print();</script>", unsafe_allow_html=True)
-            st.markdown(f"""
-                <div class="print-only" style="display:none; color:black;">
-                    <h2 style='text-align:center'>NOIR BOUTIQUE REPORT</h2>
-                    <p>Date: {datetime.now().strftime('%Y-%m-%d')}</p>
-                    <p>Daily Profit: {daily_profit:,.2f} AED</p>
-                    <hr>
-                </div>
-            """, unsafe_allow_html=True)
 
     with tab4:
         st.subheader("🤖 AI Smart Advisor")
-        user_input = st.text_area("How can I help you?", placeholder="Talk or type here...")
+        user_input = st.text_area("How can I help you?", placeholder="Tap mic to speak...")
         if st.button("✨ Ask AI"):
-            if client_ai and user_input:
+            if user_input:
                 inventory_context = df[['Name', 'Stock', 'Sold_Today']].to_string()
-                response = client_ai.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=f"You are the manager of Noir Boutique. Context: {inventory_context}. User: {user_input}"
-                )
+                response = ai_model.generate_content(f"Context: {inventory_context}. User: {user_input}")
                 st.write(response.text)
