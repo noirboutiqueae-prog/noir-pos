@@ -6,7 +6,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="NOIR BOUTIQUE POS", layout="wide")
 
 # رابط ملفك (تأكد أن هذا هو رابط ملفك الصحيح)
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1X_tIu_W_e4mD7NIn44Y9-XpXlW_hG-P3-4Ie7t2Lp28/edit#gid=0"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU/edit?gid=0#gid=0"
 CSV_URL = SHEET_URL.replace('/edit#gid=', '/export?format=csv&gid=')
 
 st.title("🖤 NOIR BOUTIQUE")
