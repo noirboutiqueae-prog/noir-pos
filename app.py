@@ -3,9 +3,10 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
-import google.generativeai as genai
+# تم التحديث للمكتبة الجديدة بناءً على تحذير النظام في 2026
+from google import genai 
 
-# --- 1. إعدادات الصفحة والثيم (الأسود والبيج) ---
+# --- 1. إعدادات الصفحة والثيم (Noir Boutique Style) ---
 st.set_page_config(page_title="Noir Boutique POS", layout="wide")
 
 st.markdown("""
@@ -14,20 +15,14 @@ st.markdown("""
     [data-testid="stMetric"] { background-color: #ffffff; padding: 20px; border-radius: 15px; border-left: 5px solid #1A1A1A; }
     .stButton>button { background-color: #1A1A1A; color: white; border-radius: 10px; height: 3em; width: 100%; font-weight: bold; }
     h1, h2, h3 { color: #1A1A1A; text-align: center; font-family: 'serif'; }
-    
-    /* تنسيق خاص للطباعة */
     @media print {
-        .stButton, .stTabs, [data-testid="stSidebar"], .stMarkdown:not(.print-only) {
-            display: none !important;
-        }
-        .print-only {
-            display: block !important;
-        }
+        .stButton, .stTabs, [data-testid="stSidebar"] { display: none !important; }
+        .print-only { display: block !important; }
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. الاتصال بقوقل شيت والذكاء الاصطناعي ---
+# --- 2. الاتصال والبيانات ---
 def get_spreadsheet():
     try:
         creds_dict = st.secrets["gcp_service_account"]
@@ -39,9 +34,10 @@ def get_spreadsheet():
         st.error(f"⚠️ Connection Error: {e}")
         return None
 
+# إعداد الذكاء الاصطناعي (Gemini 2026 SDK)
+client_ai = None
 try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    ai_model = genai.GenerativeModel('gemini-pro')
+    client_ai = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 except:
     pass
 
@@ -49,7 +45,14 @@ def load_data():
     doc = get_spreadsheet()
     if doc:
         sheet = doc.sheet1
-        return pd.DataFrame(sheet.get_all_records())
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        # التأكد من وجود الأعمدة المطلوبة لتجنب الـ KeyError
+        required_cols = ['Name', 'Stock', 'Cost', 'Sell', 'Sold_Today', 'Waste_Qty']
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = 0
+        return df
     return pd.DataFrame()
 
 def save_to_gs(df):
@@ -69,7 +72,7 @@ def log_transaction(item_name, qty, unit_price, total_price):
             log_sheet.append_row([date_str, item_name, qty, unit_price, total_price])
         except: pass
 
-# --- 3. تشغيل التطبيق ---
+# --- 3. تشغيل الواجهة ---
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
@@ -77,110 +80,70 @@ df = st.session_state.df
 st.write("<h1>🖤 NOIR BOUTIQUE</h1>", unsafe_allow_html=True)
 
 if not df.empty:
-    # حساب الإحصائيات
-    waste_loss = (df['Waste'].astype(float) * df['Cost'].astype(float)).sum()
+    # تم تعديل الأسماء هنا لتطابق قوقل شيت (Waste_Qty بدلاً من Waste)
+    waste_loss = (df['Waste_Qty'].astype(float) * df['Cost'].astype(float)).sum()
     daily_profit = (df['Sold_Today'].astype(float) * (df['Sell'].astype(float) - df['Cost'].astype(float))).sum()
     
     col1, col2, col3 = st.columns(3)
     with col1: st.metric("📦 Total Stems", int(df['Stock'].sum()))
-    with col2: st.metric("🗑️ Waste Loss", f"{waste_loss:,.2f} AED")
+    with col2: st.metric("💸 Waste Loss", f"{waste_loss:,.2f} AED")
     with col3: st.metric("💰 Today's Profit", f"{daily_profit:,.2f} AED")
 
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🛒 Sales & Stock", "🗑️ Waste", "📊 Inventory & Printing", "🤖 AI Advisor"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🛒 Sales", "🗑️ Waste", "📊 Inventory", "🤖 AI Advisor"])
 
     with tab1:
         c1, c2 = st.columns(2)
-        with c1: item = st.selectbox("Select Flower", df['Name'].unique())
-        with c2: qty = st.number_input("Quantity", min_value=1, step=1)
+        with c1: item = st.selectbox("Select Item", df['Name'].unique())
+        with c2: qty = st.number_input("Qty", min_value=1, step=1)
         
-        cb1, cb2 = st.columns(2)
-        with cb1:
-            if st.button("Confirm Sale ✅"):
-                idx = df[df['Name'] == item].index[0]
-                if df.at[idx, 'Stock'] >= qty:
-                    u_price = float(df.at[idx, 'Sell'])
-                    df.at[idx, 'Stock'] -= qty
-                    df.at[idx, 'Sold_Today'] += qty
-                    save_to_gs(df)
-                    log_transaction(item, qty, u_price, u_price * qty)
-                    st.success("Sale Recorded!")
-                    st.rerun()
-        with cb2:
-            if st.button("Add To Stock ➕"):
-                idx = df[df['Name'] == item].index[0]
-                df.at[idx, 'Stock'] += qty
+        if st.button("Confirm Sale ✅"):
+            idx = df[df['Name'] == item].index[0]
+            if df.at[idx, 'Stock'] >= qty:
+                u_price = float(df.at[idx, 'Sell'])
+                df.at[idx, 'Stock'] -= qty
+                df.at[idx, 'Sold_Today'] += qty
                 save_to_gs(df)
-                st.success("Stock Updated!")
+                log_transaction(item, qty, u_price, u_price * qty)
+                st.success("Sale Recorded!")
                 st.rerun()
+            else: st.error("No Stock!")
 
     with tab2:
-        w_item = st.selectbox("Damaged Item", df['Name'].unique(), key="w")
-        w_qty = st.number_input("Wasted Qty", min_value=1, key="wq")
+        w_item = st.selectbox("Damaged Flower", df['Name'].unique(), key="w")
+        w_qty = st.number_input("Qty", min_value=1, key="wq")
         if st.button("Confirm Waste 🗑️"):
             idx = df[df['Name'] == w_item].index[0]
             if df.at[idx, 'Stock'] >= w_qty:
                 df.at[idx, 'Stock'] -= w_qty
-                df.at[idx, 'Waste'] += w_qty
+                df.at[idx, 'Waste_Qty'] += w_qty
                 save_to_gs(df)
                 st.rerun()
 
     with tab3:
-        st.subheader("Current Inventory Status")
-        st.dataframe(df, use_container_width=True)
+        # تحديث width='stretch' ليتوافق مع نسخة 2026
+        st.dataframe(df, width='stretch')
         
-        st.divider()
-        st.write("### 🖨️ Reporting")
-        col_p1, col_p2 = st.columns(2)
-        
-        with col_p1:
-            # زر الطباعة الفوري (يستخدم جافا سكريبت لفتح نافذة طباعة المتصفح)
-            if st.button("🖨️ Print Daily Report"):
-                st.markdown("""
-                    <script>
-                        window.print();
-                    </script>
-                """, unsafe_allow_html=True)
-                
-                # شكل التقرير الذي سيظهر عند الطباعة فقط
-                st.markdown(f"""
-                    <div class="print-only" style="display:none; color: black; padding: 30px;">
-                        <h1 style="text-align:center;">NOIR BOUTIQUE - DAILY REPORT</h1>
-                        <p style="text-align:center;">Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-                        <hr>
-                        <h3>Summary:</h3>
-                        <ul>
-                            <li>Total Profit: {daily_profit:,.2f} AED</li>
-                            <li>Total Waste Loss: {waste_loss:,.2f} AED</li>
-                        </ul>
-                        <table border="1" style="width:100%; border-collapse: collapse; text-align: left;">
-                            <tr style="background-color: #f2f2f2;">
-                                <th>Item Name</th><th>Stock Left</th><th>Sold Today</th><th>Waste</th>
-                            </tr>
-                            {''.join([f"<tr><td>{row['Name']}</td><td>{row['Stock']}</td><td>{row['Sold_Today']}</td><td>{row['Waste']}</td></tr>" for _, row in df.iterrows()])}
-                        </table>
-                        <br>
-                        <p style="text-align:right;">Authorized Signature: __________________</p>
-                    </div>
-                """, unsafe_allow_html=True)
-
-        with col_p2:
-            # خيار تحميل التقرير كـ CSV (لفتحه في إكسل)
-            csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 Download Excel (CSV)",
-                data=csv,
-                file_name=f"Noir_Report_{datetime.now().strftime('%Y-%m-%d')}.csv",
-                mime='text/csv',
-            )
+        if st.button("🖨️ Print Daily Report"):
+            st.markdown("<script>window.print();</script>", unsafe_allow_html=True)
+            st.markdown(f"""
+                <div class="print-only" style="display:none; color:black;">
+                    <h2 style='text-align:center'>NOIR BOUTIQUE REPORT</h2>
+                    <p>Date: {datetime.now().strftime('%Y-%m-%d')}</p>
+                    <p>Daily Profit: {daily_profit:,.2f} AED</p>
+                    <hr>
+                </div>
+            """, unsafe_allow_html=True)
 
     with tab4:
-        st.subheader("🤖 NOIR Luxury Advisor")
-        user_input = st.text_area("How can I help you?", placeholder="Ask anything about your boutique...")
-        if st.button("✨ Get Expert Advice"):
-            if user_input:
-                inventory_info = df[['Name', 'Stock', 'Sold_Today']].to_string()
-                prompt = f"Context: {inventory_info}\nTask: {user_input}"
-                response = ai_model.generate_content(prompt)
+        st.subheader("🤖 AI Smart Advisor")
+        user_input = st.text_area("How can I help you?", placeholder="Talk or type here...")
+        if st.button("✨ Ask AI"):
+            if client_ai and user_input:
+                inventory_context = df[['Name', 'Stock', 'Sold_Today']].to_string()
+                response = client_ai.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=f"You are the manager of Noir Boutique. Context: {inventory_context}. User: {user_input}"
+                )
                 st.write(response.text)
