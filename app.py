@@ -1,136 +1,186 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import os
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, timedelta
+import google.generativeai as genai
 
-# إعدادات الصفحة لتناسب الآيباد
+# --- 1. إعدادات الصفحة والثيم (الأسود والبيج) ---
 st.set_page_config(page_title="Noir Boutique POS", layout="wide")
 
-# تصميم الثيم (اللون البيج والأسود)
 st.markdown("""
     <style>
     .main { background-color: #E5E1D8; }
-    .stButton>button { background-color: #1A1A1A; color: white; border-radius: 10px; height: 3em; width: 100%; }
-    .summary-card { background-color: white; padding: 20px; border-radius: 15px; border-left: 5px solid #1A1A1A; }
+    [data-testid="stMetric"] { background-color: #ffffff; padding: 20px; border-radius: 15px; border-left: 5px solid #1A1A1A; }
+    .stButton>button { background-color: #1A1A1A; color: white; border-radius: 10px; height: 3em; width: 100%; font-weight: bold; }
+    h1, h2, h3 { color: #1A1A1A; text-align: center; font-family: 'serif'; }
+    
+    /* تنسيق خاص للطباعة */
+    @media print {
+        .stButton, .stTabs, [data-testid="stSidebar"], .stMarkdown:not(.print-only) {
+            display: none !important;
+        }
+        .print-only {
+            display: block !important;
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# البيانات الأولية من الإكسل
-INITIAL_DATA = [
-    {"name": "Rose (Standard)", "cost": 8, "sell": 12},
-    {"name": "Rose (Ecuador Premium)", "cost": 12, "sell": 18},
-    {"name": "Spray Rose", "cost": 10, "sell": 15},
-    {"name": "Peony", "cost": 25, "sell": 35},
-    {"name": "Hydrangea", "cost": 25, "sell": 35},
-    {"name": "Tulip", "cost": 6, "sell": 10},
-    {"name": "Lily (Oriental)", "cost": 15, "sell": 25},
-    {"name": "Calla Lily", "cost": 15, "sell": 25},
-    {"name": "Orchid Stem (Phalaenopsis)", "cost": 30, "sell": 45},
-    {"name": "Cymbidium Orchid", "cost": 25, "sell": 35},
-    {"name": "Lisianthus", "cost": 10, "sell": 15},
-    {"name": "Ranunculus", "cost": 12, "sell": 18},
-    {"name": "Anemone", "cost": 12, "sell": 18},
-    {"name": "Gerbera", "cost": 5, "sell": 8},
-    {"name": "Carnation (Standard)", "cost": 4, "sell": 6},
-    {"name": "Spray Carnation", "cost": 5, "sell": 8},
-    {"name": "Chrysanthemum", "cost": 6, "sell": 10},
-    {"name": "Alstroemeria", "cost": 8, "sell": 12},
-    {"name": "Sunflower", "cost": 10, "sell": 15},
-    {"name": "Daisy", "cost": 5, "sell": 8},
-    {"name": "Baby’s Breath (Gypsophila)", "cost": 10, "sell": 15},
-    {"name": "Wax Flower", "cost": 10, "sell": 15},
-    {"name": "Eucalyptus", "cost": 8, "sell": 12},
-    {"name": "Italian Ruscus", "cost": 10, "sell": 15},
-    {"name": "Leather Leaf", "cost": 5, "sell": 8},
-    {"name": "Limonium", "cost": 6, "sell": 10},
-    {"name": "Solidago", "cost": 6, "sell": 10}
-]
+# --- 2. الاتصال بقوقل شيت والذكاء الاصطناعي ---
+def get_spreadsheet():
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client.open("NOIR_POS_DATA")
+    except Exception as e:
+        st.error(f"⚠️ Connection Error: {e}")
+        return None
 
-# وظائف إدارة البيانات
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    ai_model = genai.GenerativeModel('gemini-pro')
+except:
+    pass
+
 def load_data():
-    if os.path.exists("noir_data.csv"):
-        return pd.read_csv("noir_data.csv")
-    return pd.DataFrame([
-        {"Name": i["name"], "Stock": 0, "Cost": i["cost"], "Sell": i["sell"], "Waste_Qty": 0} 
-        for i in INITIAL_DATA
-    ])
+    doc = get_spreadsheet()
+    if doc:
+        sheet = doc.sheet1
+        return pd.DataFrame(sheet.get_all_records())
+    return pd.DataFrame()
 
-def save_data(df):
-    df.to_csv("noir_data.csv", index=False)
+def save_to_gs(df):
+    doc = get_spreadsheet()
+    if doc:
+        sheet = doc.sheet1
+        sheet.clear()
+        sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
-# تحميل البيانات في الـ Session State
+def log_transaction(item_name, qty, unit_price, total_price):
+    doc = get_spreadsheet()
+    if doc:
+        try:
+            log_sheet = doc.worksheet("SALES_LOG")
+            uae_time = datetime.utcnow() + timedelta(hours=4)
+            date_str = uae_time.strftime("%Y-%m-%d %H:%M:%S")
+            log_sheet.append_row([date_str, item_name, qty, unit_price, total_price])
+        except: pass
+
+# --- 3. تشغيل التطبيق ---
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
-# --- واجهة المستخدم ---
-st.title("🖤 NOIR BOUTIQUE | Dashboard")
-
-# شريط إحصائيات علوي (Cards)
 df = st.session_state.df
-total_stems = df['Stock'].sum()
-total_waste_loss = (df['Waste_Qty'] * df['Cost']).sum()
-total_profit = ((df['Sell'] - df['Cost']) * df['Stock']).sum()
+st.write("<h1>🖤 NOIR BOUTIQUE</h1>", unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown(f"<div class='summary-card'><h3>📦 Total Stems</h3><h2>{total_stems}</h2></div>", unsafe_allow_html=True)
-with col2:
-    st.markdown(f"<div class='summary-card'><h3>💸 Waste Loss</h3><h2 style='color:red;'>{total_waste_loss:,.2f} AED</h2></div>", unsafe_allow_html=True)
-with col3:
-    st.markdown(f"<div class='summary-card'><h3>💰 Est. Profit</h3><h2 style='color:green;'>{total_profit:,.2f} AED</h2></div>", unsafe_allow_html=True)
+if not df.empty:
+    # حساب الإحصائيات
+    waste_loss = (df['Waste'].astype(float) * df['Cost'].astype(float)).sum()
+    daily_profit = (df['Sold_Today'].astype(float) * (df['Sell'].astype(float) - df['Cost'].astype(float))).sum()
+    
+    col1, col2, col3 = st.columns(3)
+    with col1: st.metric("📦 Total Stems", int(df['Stock'].sum()))
+    with col2: st.metric("🗑️ Waste Loss", f"{waste_loss:,.2f} AED")
+    with col3: st.metric("💰 Today's Profit", f"{daily_profit:,.2f} AED")
 
-st.divider()
+    st.divider()
 
-# منطقة العمليات (Tabs)
-tab1, tab2, tab3 = st.tabs(["🛒 Sales & Stock", "🗑️ Waste Management", "📊 Inventory Editor"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🛒 Sales & Stock", "🗑️ Waste", "📊 Inventory & Printing", "🤖 AI Advisor"])
 
-with tab1:
-    c1, c2, c3 = st.columns([2, 1, 1])
-    with c1:
-        item = st.selectbox("Select Flower", df['Name'].unique(), key="sale_item")
-    with c2:
-        qty = st.number_input("Quantity", min_value=1, value=1, key="sale_qty")
-    with c3:
-        st.write("##")
-        if st.button("Confirm Sale ✅"):
-            idx = df[df['Name'] == item].index[0]
-            if df.at[idx, 'Stock'] >= qty:
-                df.at[idx, 'Stock'] -= qty
-                save_data(df)
-                st.success("Sale Recorded!")
-                st.rerun()
-            else:
-                st.error("Not enough stock!")
+    with tab1:
+        c1, c2 = st.columns(2)
+        with c1: item = st.selectbox("Select Flower", df['Name'].unique())
+        with c2: qty = st.number_input("Quantity", min_value=1, step=1)
         
-        if st.button("Add To Stock ➕"):
-            idx = df[df['Name'] == item].index[0]
-            df.at[idx, 'Stock'] += qty
-            save_data(df)
-            st.success("Stock Updated!")
-            st.rerun()
+        cb1, cb2 = st.columns(2)
+        with cb1:
+            if st.button("Confirm Sale ✅"):
+                idx = df[df['Name'] == item].index[0]
+                if df.at[idx, 'Stock'] >= qty:
+                    u_price = float(df.at[idx, 'Sell'])
+                    df.at[idx, 'Stock'] -= qty
+                    df.at[idx, 'Sold_Today'] += qty
+                    save_to_gs(df)
+                    log_transaction(item, qty, u_price, u_price * qty)
+                    st.success("Sale Recorded!")
+                    st.rerun()
+        with cb2:
+            if st.button("Add To Stock ➕"):
+                idx = df[df['Name'] == item].index[0]
+                df.at[idx, 'Stock'] += qty
+                save_to_gs(df)
+                st.success("Stock Updated!")
+                st.rerun()
 
-with tab2:
-    st.subheader("Record Damaged Flowers")
-    w_col1, w_col2 = st.columns(2)
-    with w_col1:
-        w_item = st.selectbox("Damaged Item", df['Name'].unique())
-    with w_col2:
-        w_qty = st.number_input("Wasted Quantity", min_value=1, value=1)
-    
-    if st.button("Confirm Waste 🗑️"):
-        idx = df[df['Name'] == w_item].index[0]
-        if df.at[idx, 'Stock'] >= w_qty:
-            df.at[idx, 'Stock'] -= w_qty
-            df.at[idx, 'Waste_Qty'] += w_qty
-            save_data(df)
-            st.warning("Waste Recorded")
-            st.rerun()
+    with tab2:
+        w_item = st.selectbox("Damaged Item", df['Name'].unique(), key="w")
+        w_qty = st.number_input("Wasted Qty", min_value=1, key="wq")
+        if st.button("Confirm Waste 🗑️"):
+            idx = df[df['Name'] == w_item].index[0]
+            if df.at[idx, 'Stock'] >= w_qty:
+                df.at[idx, 'Stock'] -= w_qty
+                df.at[idx, 'Waste'] += w_qty
+                save_to_gs(df)
+                st.rerun()
 
-with tab3:
-    st.subheader("Inventory Status")
-    # عرض الجدول بشكل تفاعلي
-    st.dataframe(df, use_container_width=True)
-    
-    if st.button("Export Report 📄"):
-        df.to_csv(f"Report_{datetime.now().strftime('%Y-%m-%d')}.csv")
-        st.info("Report Saved to Server")
+    with tab3:
+        st.subheader("Current Inventory Status")
+        st.dataframe(df, use_container_width=True)
+        
+        st.divider()
+        st.write("### 🖨️ Reporting")
+        col_p1, col_p2 = st.columns(2)
+        
+        with col_p1:
+            # زر الطباعة الفوري (يستخدم جافا سكريبت لفتح نافذة طباعة المتصفح)
+            if st.button("🖨️ Print Daily Report"):
+                st.markdown("""
+                    <script>
+                        window.print();
+                    </script>
+                """, unsafe_allow_html=True)
+                
+                # شكل التقرير الذي سيظهر عند الطباعة فقط
+                st.markdown(f"""
+                    <div class="print-only" style="display:none; color: black; padding: 30px;">
+                        <h1 style="text-align:center;">NOIR BOUTIQUE - DAILY REPORT</h1>
+                        <p style="text-align:center;">Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+                        <hr>
+                        <h3>Summary:</h3>
+                        <ul>
+                            <li>Total Profit: {daily_profit:,.2f} AED</li>
+                            <li>Total Waste Loss: {waste_loss:,.2f} AED</li>
+                        </ul>
+                        <table border="1" style="width:100%; border-collapse: collapse; text-align: left;">
+                            <tr style="background-color: #f2f2f2;">
+                                <th>Item Name</th><th>Stock Left</th><th>Sold Today</th><th>Waste</th>
+                            </tr>
+                            {''.join([f"<tr><td>{row['Name']}</td><td>{row['Stock']}</td><td>{row['Sold_Today']}</td><td>{row['Waste']}</td></tr>" for _, row in df.iterrows()])}
+                        </table>
+                        <br>
+                        <p style="text-align:right;">Authorized Signature: __________________</p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+        with col_p2:
+            # خيار تحميل التقرير كـ CSV (لفتحه في إكسل)
+            csv = df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 Download Excel (CSV)",
+                data=csv,
+                file_name=f"Noir_Report_{datetime.now().strftime('%Y-%m-%d')}.csv",
+                mime='text/csv',
+            )
+
+    with tab4:
+        st.subheader("🤖 NOIR Luxury Advisor")
+        user_input = st.text_area("How can I help you?", placeholder="Ask anything about your boutique...")
+        if st.button("✨ Get Expert Advice"):
+            if user_input:
+                inventory_info = df[['Name', 'Stock', 'Sold_Today']].to_string()
+                prompt = f"Context: {inventory_info}\nTask: {user_input}"
+                response = ai_model.generate_content(prompt)
+                st.write(response.text)
