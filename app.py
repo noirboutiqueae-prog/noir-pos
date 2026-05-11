@@ -21,13 +21,13 @@ sheet = get_connection()
 
 # Sidebar Navigation
 st.sidebar.title("🌸 NOIR Flowers")
-choice = st.sidebar.radio("Navigate to:", ["POS Terminal", "Add New Stock", "Sales & Stock Aging"])
+choice = st.sidebar.radio("Navigate to:", ["POS Terminal", "Add New Stock", "Daily Sales & Stock Aging"])
 
 if sheet:
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
     
-    # Clean Numeric Columns
+    # Ensure numeric columns are handled correctly
     numeric_cols = ['Stock', 'Cost', 'Sell', 'Sold_Today']
     for col in numeric_cols:
         if col in df.columns:
@@ -37,7 +37,7 @@ if sheet:
     if choice == "POS Terminal":
         st.title("🛒 Flower Sale")
         with st.form("sale_form", clear_on_submit=True):
-            product = st.selectbox("Select Flower/Bouquet", df['Name'].tolist())
+            product = st.selectbox("Select Flower", df['Name'].tolist())
             amount = st.number_input("Quantity Sold", min_value=1, step=1)
             if st.form_submit_button("Complete Sale ✅"):
                 cell = sheet.find(product)
@@ -55,51 +55,62 @@ if sheet:
                 else:
                     st.error("Out of Stock!")
 
-    # --- Section 2: Add New Stock (With Date) ---
+    # --- Section 2: Add New Stock ---
     elif choice == "Add New Stock":
         st.title("➕ Add New Flower Batch")
         with st.form("add_product_form", clear_on_submit=True):
-            new_name = st.text_input("Flower Name (e.g., Red Roses)")
+            new_name = st.text_input("Flower Name")
             new_stock = st.number_input("Initial Quantity", min_value=0, step=1)
             new_cost = st.number_input("Cost per Item", min_value=0.0)
             new_sell = st.number_input("Selling Price", min_value=0.0)
-            # Automatic Date Capture
             today_date = datetime.now().strftime("%Y-%m-%d")
             
             if st.form_submit_button("Add to Inventory 💾"):
                 if new_name:
-                    # Append: Name, Stock, Cost, Sell, Sold_Today, Date_Added
                     sheet.append_row([new_name, new_stock, new_cost, new_sell, 0, today_date])
                     st.success(f"Added {new_name} on {today_date}")
                     st.cache_data.clear()
                     st.rerun()
 
-    # --- Section 3: Sales & Stock Aging (The New Feature) ---
-    elif choice == "Sales & Stock Aging":
-        st.title("📅 Stock Aging & Sales Report")
+    # --- Section 3: Daily Sales & Aging (Fixed and Updated) ---
+    elif choice == "Daily Sales & Stock Aging":
+        st.title("📊 Daily Report & Stock Aging")
         
-        # Calculate Aging
+        # 1. Sales Calculation (Total Revenue)
+        df['Total_Revenue'] = df['Sold_Today'] * df['Sell']
+        grand_total = df['Total_Revenue'].sum()
+        
+        # 2. Aging Calculation
         if 'Date_Added' in df.columns:
             df['Date_Added'] = pd.to_datetime(df['Date_Added'], errors='coerce')
             today = pd.Timestamp(datetime.now().date())
-            df['Days_in_Stock'] = (today - df['Date_Added']).dt.days
+            df['Days_in_Stock'] = (today - df['Date_Added']).dt.days.fillna(0).astype(int)
         
-        # Metrics
-        df['Total_Revenue'] = df['Sold_Today'] * df['Sell']
-        st.metric("Total Today's Revenue", f"${df['Total_Revenue'].sum():,.2f}")
+        col1, col2 = st.columns(2)
+        col1.metric("Items Sold Today", f"{int(df['Sold_Today'].sum())} units")
+        col2.metric("Total Daily Revenue", f"${grand_total:,.2f}")
         
-        st.write("### 📊 Inventory Aging Details")
-        # Custom display to highlight old flowers
-        def highlight_old(val):
-            color = 'red' if val > 3 else 'black'
-            return f'color: {color}'
+        st.write("### 💰 Sales Breakdown")
+        sales_df = df[df['Sold_Today'] > 0][['Name', 'Sold_Today', 'Sell', 'Total_Revenue']]
+        if not sales_df.empty:
+            st.table(sales_df)
+        else:
+            st.info("No sales yet today.")
+
+        st.divider()
+        st.write("### 🥀 Stock Aging (Freshness)")
         
-        aging_df = df[['Name', 'Stock', 'Date_Added', 'Days_in_Stock']].copy()
-        aging_df['Date_Added'] = aging_df['Date_Added'].dt.date
-        st.dataframe(aging_df.style.applymap(highlight_old, subset=['Days_in_Stock']), use_container_width=True)
-        st.info("💡 Note: Flowers in RED have been in stock for more than 3 days.")
+        # Fixed Style logic (map instead of applymap)
+        def highlight_aging(val):
+            return 'color: red; font-weight: bold' if val > 3 else 'color: green'
+        
+        aging_display = df[['Name', 'Stock', 'Date_Added', 'Days_in_Stock']].copy()
+        aging_display['Date_Added'] = aging_display['Date_Added'].dt.date
+        
+        st.dataframe(aging_display.style.map(highlight_aging, subset=['Days_in_Stock']), use_container_width=True)
+        st.info("💡 Items in RED have been in stock for more than 3 days.")
 
     # Bottom Inventory View
     st.divider()
-    st.subheader("📦 Live Inventory Snapshot")
+    st.subheader("📦 Live Inventory View")
     st.dataframe(df[['Name', 'Stock', 'Sell', 'Sold_Today']], use_container_width=True, hide_index=True)
