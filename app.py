@@ -2,54 +2,64 @@ import streamlit as st
 import pandas as pd
 import gspread
 
-# 1. Config
+# 1. POS Terminal Configuration
 st.set_page_config(page_title="NOIR POS", layout="centered")
 
-# 2. Connection
-def connect_to_sheet():
+def get_connection():
     try:
-        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        # Fetching secrets
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        
+        # التنظيف الذاتي للمفتاح لمنع خطأ الـ 65 حرفاً
+        clean_key = creds_dict["private_key"].replace("\\n", "\n").strip()
+        creds_dict["private_key"] = clean_key
+        
+        gc = gspread.service_account_from_dict(creds_dict)
+        # Using your Sheet ID
         sh = gc.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU")
         return sh.sheet1
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"⚠️ Connection Error: {e}")
         return None
 
-sheet = connect_to_sheet()
+sheet = get_connection()
 
 st.title("🖤 NOIR POS TERMINAL")
 
 if sheet:
-    # Refresh button
-    if st.button("Refresh Data 🔄"):
+    # Refresh logic
+    if st.button("Refresh Inventory 🔄"):
         st.cache_data.clear()
 
-    # Get data
+    # Load data
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
     # POS Sale Form
-    st.subheader("🛒 Process a Sale")
-    with st.form("pos_form", clear_on_submit=True):
-        item = st.selectbox("Select Item", df['Name'].tolist())
-        qty = st.number_input("Quantity", min_value=1, step=1)
+    st.subheader("🛒 New Transaction")
+    with st.form("pos_sale", clear_on_submit=True):
+        product = st.selectbox("Select Item", df['Name'].tolist())
+        amount = st.number_input("Quantity", min_value=1, step=1)
         confirm = st.form_submit_button("Complete Sale ✅")
 
         if confirm:
-            cell = sheet.find(item)
-            # Stock is Col 2, Sold_Today is Col 5
-            current_stock = int(sheet.cell(cell.row, 2).value)
-            current_sold = int(sheet.cell(cell.row, 5).value or 0)
+            cell = sheet.find(product)
+            row = cell.row
             
-            if current_stock >= qty:
-                sheet.update_cell(cell.row, 2, current_stock - qty)
-                sheet.update_cell(cell.row, 5, current_sold + qty)
+            # Stock is Col 2, Sold_Today is Col 5
+            curr_stock = int(sheet.cell(row, 2).value)
+            curr_sold = int(sheet.cell(row, 5).value or 0)
+            
+            if curr_stock >= amount:
+                # Update Inventory
+                sheet.update_cell(row, 2, curr_stock - amount)
+                sheet.update_cell(row, 5, curr_sold + amount)
                 st.balloons()
-                st.success(f"Sold {qty} of {item}!")
+                st.success(f"Sold {amount} of {product}!")
                 st.cache_data.clear()
             else:
-                st.error("Not enough stock!")
+                st.error("Insufficient Stock!")
 
     st.divider()
-    st.subheader("📊 Live Inventory")
+    st.subheader("📊 Inventory Overview")
     st.dataframe(df, use_container_width=True, hide_index=True)
