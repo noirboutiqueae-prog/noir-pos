@@ -1,14 +1,16 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import plotly.express as px
 
 # 1. POS Terminal Setup
 st.set_page_config(page_title="NOIR POS TERMINAL", layout="centered")
 
-# 2. Connection to Google Sheets
+# 2. Connection using the service account secrets
 def connect_sheet():
     try:
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        # Spreadsheet ID from your provided URL
         sh = gc.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU")
         return sh.sheet1
     except Exception as e:
@@ -17,12 +19,12 @@ def connect_sheet():
 
 sheet = connect_sheet()
 
-# 3. Design & Header
+# 3. Header & UI
 st.markdown("<h1 style='text-align: center;'>🖤 NOIR POS TERMINAL</h1>", unsafe_allow_html=True)
 st.divider()
 
 if sheet:
-    # Refresh data button
+    # Refresh data
     if st.button("Refresh Inventory 🔄"):
         st.cache_data.clear()
 
@@ -31,29 +33,30 @@ if sheet:
     df = pd.DataFrame(data)
 
     # 4. Sale Transaction Form
-    st.subheader("🛒 New Sale")
-    with st.form("transaction_form", clear_on_submit=True):
-        product = st.selectbox("Select Item", df['Name'].tolist())
-        quantity = st.number_input("Quantity Sold", min_value=1, step=1)
-        submit_sale = st.form_submit_button("Confirm Transaction ✅")
+    st.subheader("🛒 Record a New Sale")
+    with st.form("sale_form", clear_on_submit=True):
+        item_name = st.selectbox("Select Product", df['Name'].tolist())
+        qty_sold = st.number_input("Quantity", min_value=1, step=1)
+        submit = st.form_submit_button("Confirm Transaction ✅")
 
-        if submit_sale:
-            cell = sheet.find(product)
+        if submit:
+            cell = sheet.find(item_name)
             row_idx = cell.row
             
-            # Col 2 is 'Stock', Col 5 is 'Sold_Today'
+            # Stock is Col 2, Sold_Today is Col 5 (Based on your sheet structure)
             current_stock = int(sheet.cell(row_idx, 2).value)
             current_sold = int(sheet.cell(row_idx, 5).value or 0)
             
-            if current_stock >= quantity:
-                # Deduction Logic
-                sheet.update_cell(row_idx, 2, current_stock - quantity)
-                sheet.update_cell(row_idx, 5, current_sold + quantity)
+            if current_stock >= qty_sold:
+                # Update Google Sheet
+                sheet.update_cell(row_idx, 2, current_stock - qty_sold)
+                sheet.update_cell(row_idx, 5, current_sold + qty_sold)
+                
                 st.balloons()
-                st.success(f"Sale successful! Deducted {quantity} from {product} stock.")
+                st.success(f"Transaction successful! {qty_sold} unit(s) deducted from {item_name}.")
                 st.cache_data.clear()
             else:
-                st.error(f"Not enough stock! Current inventory: {current_stock}")
+                st.error(f"Insufficient Stock! Only {current_stock} remaining.")
 
     # 5. Live Inventory Display
     st.divider()
