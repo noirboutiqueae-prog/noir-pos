@@ -2,67 +2,71 @@ import streamlit as st
 import pandas as pd
 import gspread
 
-# 1. POS Interface Setup
+# 1. POS Terminal UI
 st.set_page_config(page_title="NOIR POS TERMINAL", layout="centered")
 
-# 2. Connection with Error Handling
-def connect_to_google():
+# 2. Connection Logic with Debugging
+def connect_to_sheet():
     try:
+        if "gcp_service_account" not in st.secrets:
+            st.error("Key 'gcp_service_account' is missing from Secrets!")
+            return None
+        
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-        # Spreadsheet ID from your URL
+        # Your specific spreadsheet ID
         sh = gc.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU")
         return sh.sheet1
     except Exception as e:
         st.error(f"⚠️ Connection Error: {str(e)}")
         return None
 
-sheet = connect_to_google()
+sheet = connect_to_sheet()
 
 st.markdown("<h1 style='text-align: center;'>🖤 NOIR POS TERMINAL</h1>", unsafe_allow_html=True)
 st.divider()
 
 if sheet:
-    # Refreshing Data
+    # Button to force data refresh
     if st.button("Refresh Inventory 🔄"):
         st.cache_data.clear()
 
-    # Getting all rows
+    # Load data once and cache it
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
-    # 3. Sales Transaction Form
-    st.subheader("🛒 Record a New Sale")
-    with st.form("sale_entry", clear_on_submit=True):
+    # 3. POS Transaction Section
+    st.subheader("🛒 Process a New Sale")
+    with st.form("pos_sale", clear_on_submit=True):
         selected_item = st.selectbox("Select Product", df['Name'].tolist())
-        quantity_to_sell = st.number_input("Quantity", min_value=1, step=1)
-        confirm_btn = st.form_submit_button("Complete Sale ✅")
+        amount_sold = st.number_input("Quantity", min_value=1, step=1)
+        complete_sale = st.form_submit_button("Complete Transaction ✅")
 
-        if confirm_btn:
-            with st.spinner("Updating Google Sheets..."):
+        if complete_sale:
+            with st.spinner("Recording sale..."):
                 try:
-                    # Find exact row
+                    # Find product row
                     cell = sheet.find(selected_item)
-                    row_idx = cell.row
+                    row = cell.row
                     
-                    # Columns: Stock is B (2), Sold_Today is E (5)
-                    current_stock = int(sheet.cell(row_idx, 2).value)
-                    current_sold = int(sheet.cell(row_idx, 5).value or 0)
+                    # Columns from your sheet: 
+                    # Stock = Column 2 (B), Sold_Today = Column 5 (E)
+                    current_stock = int(sheet.cell(row, 2).value)
+                    current_sold_today = int(sheet.cell(row, 5).value or 0)
                     
-                    if current_stock >= quantity_to_sell:
-                        # Transaction Execution
-                        sheet.update_cell(row_idx, 2, current_stock - quantity_to_sell)
-                        sheet.update_cell(row_idx, 5, current_sold + quantity_to_sell)
+                    if current_stock >= amount_sold:
+                        # Transaction execution
+                        sheet.update_cell(row, 2, current_stock - amount_sold)
+                        sheet.update_cell(row, 5, current_sold_today + amount_sold)
+                        
                         st.balloons()
-                        st.success(f"Sale successful! {quantity_to_sell} units deducted from {selected_item}.")
+                        st.success(f"Sale of {amount_sold} {selected_item} recorded successfully!")
                         st.cache_data.clear()
                     else:
-                        st.error(f"Insufficient stock! Only {current_stock} available.")
+                        st.error(f"Not enough stock! Available: {current_stock}")
                 except Exception as ex:
-                    st.error(f"Transaction failed: {ex}")
+                    st.error(f"Failed to update sheet: {ex}")
 
-    # 4. Inventory List View
+    # 4. Table Preview
     st.divider()
-    st.subheader("📊 Current Stock Levels")
+    st.subheader("📊 Current Stock Overview")
     st.dataframe(df, use_container_width=True, hide_index=True)
-else:
-    st.warning("Please check your Secrets configuration and ensure the Service Account email has 'Editor' access to the Sheet.")
