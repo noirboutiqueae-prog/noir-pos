@@ -1,85 +1,52 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-# 1. Page Config
-st.set_page_config(page_title="NOIR POS PRO", layout="wide")
+# 1. POS Configuration
+st.set_page_config(page_title="NOIR POS SYSTEM", layout="centered")
 
-# 2. Data Fetching
-SHEET_ID = "1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
+# 2. Connect to Google Sheets via Service Account
+def connect_sheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    # Opening your sheet by ID
+    return client.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU").sheet1
 
-def load_data():
-    try:
-        df = pd.read_csv(SHEET_URL)
-        df = df.dropna(how='all')
-        # Ensure numeric columns are correct
-        numeric_cols = df.columns[1:] 
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        return df
-    except:
-        return pd.DataFrame()
+sheet = connect_sheet()
 
-df = load_data()
+def get_data():
+    return pd.DataFrame(sheet.get_all_records())
 
-# 3. Header
-st.markdown("<h1 style='text-align: center; color: #BB86FC;'>🖤 NOIR BOUTIQUE - INVENTORY MANAGEMENT</h1>", unsafe_allow_html=True)
+# 3. UI Design
+st.markdown("<h1 style='text-align: center; color: #BB86FC;'>🖤 NOIR POS TERMINAL</h1>", unsafe_allow_html=True)
 st.divider()
 
-# 4. Sidebar with "Quick Action"
-with st.sidebar:
-    st.title("Settings")
-    if st.button('🔄 Refresh Data'):
-        st.cache_data.clear()
-        st.rerun()
-    
-    st.divider()
-    st.info("💡 **How to add items?**\nClick the button below to open your Google Sheet, add a new row, then come back and hit Refresh.")
-    # زر يفتح لك ملف قوقل شيت مباشرة للإضافة
-    st.link_button("➕ Open Sheet to Add Items", f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit")
+df = get_data()
 
-if not df.empty:
-    # 5. Dashboard Metrics
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Total Items", len(df))
-    with c2:
-        st.metric("Total Stock Value", f"{df.iloc[:, 4].sum():,.0f} AED")
-    with c3:
-        # إذا أضفت عمود النوع (Category) في العمود الثالث (C)
-        if len(df.columns) > 2:
-            types_count = df.iloc[:, 2].nunique()
-            st.metric("Total Categories", types_count)
+# 4. Transaction Section
+st.subheader("New Sale Transaction")
+with st.form("sale_form"):
+    product_name = st.selectbox("Select Product", df.iloc[:, 0].tolist())
+    quantity = st.number_input("Quantity", min_value=1, value=1)
+    submit = st.form_submit_button("Complete Sale ✅")
 
-    st.divider()
+    if submit:
+        # Find product row
+        cell = sheet.find(product_name)
+        current_stock = int(sheet.cell(cell.row, 2).value) # Stock is in column B
+        
+        if current_stock >= quantity:
+            new_stock = current_stock - quantity
+            sheet.update_cell(cell.row, 2, new_stock) # Update Column B
+            st.success(f"Sold {quantity} of {product_name}. Stock updated!")
+            st.cache_data.clear()
+        else:
+            st.error("Insufficient Stock!")
 
-    # 6. Advanced Filters
-    col_search, col_filter = st.columns([2, 1])
-    with col_search:
-        search = st.text_input("🔍 Search by Model Name")
-    with col_filter:
-        if len(df.columns) > 2:
-            categories = ["All"] + list(df.iloc[:, 2].unique())
-            selected_cat = st.selectbox("📁 Filter by Type", categories)
-
-    # Filter Logic
-    filtered_df = df.copy()
-    if search:
-        filtered_df = filtered_df[filtered_df.iloc[:, 0].astype(str).str.contains(search, case=False)]
-    if len(df.columns) > 2 and selected_cat != "All":
-        filtered_df = filtered_df[filtered_df.iloc[:, 2] == selected_cat]
-
-    # 7. Display Table
-    st.subheader("Inventory List")
-    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
-
-    # 8. Charts
-    if len(df.columns) > 2:
-        st.subheader("📈 Stock Distribution by Type")
-        fig = px.pie(df, values=df.columns[1], names=df.columns[2], hole=0.4,
-                     color_discrete_sequence=px.colors.sequential.Purples_r)
-        st.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.error("Could not load data. Please check your Google Sheet connection.")
+# 5. Inventory Overview
+st.divider()
+st.subheader("Current Inventory Status")
+st.dataframe(get_data(), use_container_width=True, hide_index=True)
