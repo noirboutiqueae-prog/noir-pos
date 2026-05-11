@@ -1,52 +1,57 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
-# 1. POS Configuration
+# 1. Page Config
 st.set_page_config(page_title="NOIR POS SYSTEM", layout="centered")
 
-# 2. Connect to Google Sheets via Service Account
-def connect_sheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    # Opening your sheet by ID
-    return client.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU").sheet1
+# 2. Connection Logic (Modern & Fast)
+def connect_to_sheet():
+    try:
+        # Connect using the dict in secrets
+        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        # Open your specific sheet
+        sh = gc.open_by_key("1SDelm476fA-dJ2_ZWQI0hyMl8yKSxrYhMIdDoWWExfU")
+        return sh.sheet1
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
+        return None
 
-sheet = connect_sheet()
+sheet = connect_to_sheet()
 
-def get_data():
-    return pd.DataFrame(sheet.get_all_records())
-
-# 3. UI Design
+# 3. UI Header
 st.markdown("<h1 style='text-align: center; color: #BB86FC;'>🖤 NOIR POS TERMINAL</h1>", unsafe_allow_html=True)
 st.divider()
 
-df = get_data()
+if sheet:
+    # Get all records
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
 
-# 4. Transaction Section
-st.subheader("New Sale Transaction")
-with st.form("sale_form"):
-    product_name = st.selectbox("Select Product", df.iloc[:, 0].tolist())
-    quantity = st.number_input("Quantity", min_value=1, value=1)
-    submit = st.form_submit_button("Complete Sale ✅")
+    # 4. Sales Section
+    st.subheader("🛒 New Transaction")
+    with st.form("pos_form"):
+        # Select product from Column 'Name'
+        item = st.selectbox("Select Product", df['Name'].tolist())
+        qty = st.number_input("Quantity to Sell", min_value=1, value=1)
+        submit = st.form_submit_button("Confirm Sale ✅")
 
-    if submit:
-        # Find product row
-        cell = sheet.find(product_name)
-        current_stock = int(sheet.cell(cell.row, 2).value) # Stock is in column B
-        
-        if current_stock >= quantity:
-            new_stock = current_stock - quantity
-            sheet.update_cell(cell.row, 2, new_stock) # Update Column B
-            st.success(f"Sold {quantity} of {product_name}. Stock updated!")
-            st.cache_data.clear()
-        else:
-            st.error("Insufficient Stock!")
+        if submit:
+            # Find the row of the item
+            cell = sheet.find(item)
+            # Assuming Stock is in the 2nd Column (B)
+            current_stock = int(sheet.cell(cell.row, 2).value)
+            
+            if current_stock >= qty:
+                new_stock = current_stock - qty
+                sheet.update_cell(cell.row, 2, new_stock)
+                st.balloons()
+                st.success(f"Successfully sold {qty} of {item}! Stock is now {new_stock}.")
+                st.cache_data.clear()
+            else:
+                st.error(f"Not enough stock! Current stock is only {current_stock}.")
 
-# 5. Inventory Overview
-st.divider()
-st.subheader("Current Inventory Status")
-st.dataframe(get_data(), use_container_width=True, hide_index=True)
+    # 5. Live Inventory View
+    st.divider()
+    st.subheader("📦 Live Inventory")
+    st.dataframe(df, use_container_width=True, hide_index=True)
